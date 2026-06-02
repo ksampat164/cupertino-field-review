@@ -209,6 +209,46 @@ textarea { resize: none; height: 80px; }
 }
 #toast.show { opacity: 1; }
 
+/* PCI Filter panel */
+#pci-filter {
+  position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+  background: rgba(17,24,39,0.95);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 16px; padding: 10px 14px;
+  z-index: 500; backdrop-filter: blur(10px);
+  display: flex; align-items: center; gap: 10px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+  white-space: nowrap;
+}
+#pci-filter .filter-label {
+  font-size: 11px; color: #64748b; text-transform: uppercase;
+  letter-spacing: 0.5px; font-weight: 600;
+}
+#pci-filter select {
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 8px; color: #e2e8f0;
+  font-size: 13px; font-weight: 600;
+  padding: 5px 8px; cursor: pointer;
+  outline: none; -webkit-appearance: none;
+  text-align: center;
+}
+#pci-filter select:focus { border-color: #6366f1; }
+#pci-filter .filter-sep { color: #475569; font-size: 12px; }
+#filter-active-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: #facc15; display: none; flex-shrink: 0;
+}
+#filter-active-dot.active { display: block; }
+#filter-reset {
+  font-size: 11px; color: #6366f1; cursor: pointer;
+  padding: 3px 6px; border-radius: 6px;
+  border: 1px solid rgba(99,102,241,0.3);
+  background: rgba(99,102,241,0.1);
+  display: none;
+}
+#filter-reset.visible { display: block; }
+
 /* Distress quick-buttons */
 .distress-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .distress-btn {
@@ -247,6 +287,15 @@ textarea { resize: none; height: 80px; }
 <div id="nearest-toast" onclick="openNearestStreet()">
   <div><div class="nt-label">Nearest Street</div><div id="nearest-name">—</div></div>
   <div style="color:#3b82f6;font-size:18px;">→</div>
+</div>
+
+<div id="pci-filter">
+  <span class="filter-label">PCI</span>
+  <div id="filter-active-dot"></div>
+  <select id="pci-min" onchange="applyFilter()"></select>
+  <span class="filter-sep">–</span>
+  <select id="pci-max" onchange="applyFilter()"></select>
+  <span id="filter-reset" onclick="resetFilter()">Reset</span>
 </div>
 
 <div id="overlay">
@@ -400,16 +449,81 @@ STREETS.forEach(f => {
 });
 
 function refreshColors() {
+  const minPCI = parseInt(document.getElementById('pci-min')?.value ?? 0);
+  const maxPCI = parseInt(document.getElementById('pci-max')?.value ?? 100);
   STREETS.forEach(f => {
-    polylines[f.id]?.setStyle({ color: getColor(f.id), weight: getWeight(f.id) });
+    const pci = parseInt(f.props.PCI || f.props.CurrentPCI || 0);
+    const inRange = pci >= minPCI && pci <= maxPCI;
+    polylines[f.id]?.setStyle({
+      color: getColor(f.id),
+      weight: getWeight(f.id),
+      opacity: inRange ? 0.9 : 0.12,
+    });
   });
   updateStats();
 }
 
 function updateStats() {
-  const rev = Object.values(data).filter(d => d.tx).length;
+  const minPCI = parseInt(document.getElementById('pci-min')?.value ?? 0);
+  const maxPCI = parseInt(document.getElementById('pci-max')?.value ?? 100);
+  const inRange = STREETS.filter(f => {
+    const pci = parseInt(f.props.PCI || f.props.CurrentPCI || 0);
+    return pci >= minPCI && pci <= maxPCI;
+  });
+  const rev = inRange.filter(f => data[f.id] && data[f.id].tx).length;
+  const remaining = inRange.filter(f => !data[f.id] || !data[f.id].tx).length;
   document.getElementById('cnt-reviewed').textContent = rev;
-  document.getElementById('cnt-remaining').textContent = 919 - rev;
+  document.getElementById('cnt-remaining').textContent = remaining;
+}
+
+// ---- PCI Filter ----
+function buildFilterDropdowns() {
+  // Build options in steps of 5 from 0 to 100
+  const vals = [];
+  for (let i = 0; i <= 100; i += 5) vals.push(i);
+  // Also include any exact PCI values from data not already covered
+  const exactPCIs = new Set(STREETS.map(f => parseInt(f.props.PCI || f.props.CurrentPCI || 0)));
+  exactPCIs.forEach(v => { if (!vals.includes(v)) vals.push(v); });
+  vals.sort((a, b) => a - b);
+
+  const minSel = document.getElementById('pci-min');
+  const maxSel = document.getElementById('pci-max');
+
+  vals.forEach(v => {
+    const o1 = document.createElement('option'); o1.value = v; o1.textContent = v;
+    const o2 = document.createElement('option'); o2.value = v; o2.textContent = v;
+    minSel.appendChild(o1);
+    maxSel.appendChild(o2);
+  });
+
+  minSel.value = 0;
+  maxSel.value = 100;
+}
+
+function applyFilter() {
+  let minVal = parseInt(document.getElementById('pci-min').value);
+  let maxVal = parseInt(document.getElementById('pci-max').value);
+
+  // Swap if user sets min > max
+  if (minVal > maxVal) {
+    document.getElementById('pci-min').value = maxVal;
+    document.getElementById('pci-max').value = minVal;
+    [minVal, maxVal] = [maxVal, minVal];
+  }
+
+  const isFiltered = minVal > 0 || maxVal < 100;
+  document.getElementById('filter-active-dot').classList.toggle('active', isFiltered);
+  document.getElementById('filter-reset').classList.toggle('visible', isFiltered);
+
+  refreshColors();
+}
+
+function resetFilter() {
+  document.getElementById('pci-min').value = 0;
+  document.getElementById('pci-max').value = 100;
+  document.getElementById('filter-active-dot').classList.remove('active');
+  document.getElementById('filter-reset').classList.remove('visible');
+  refreshColors();
 }
 
 // ---- Modal ----
@@ -718,6 +832,7 @@ function clearDistressButtons() {
   document.querySelectorAll('.distress-btn').forEach(b => b.classList.remove('selected'));
 }
 
+buildFilterDropdowns();
 updateStats();
 </script>
 </body>
